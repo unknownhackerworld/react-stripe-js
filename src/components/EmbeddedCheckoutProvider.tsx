@@ -81,12 +81,22 @@ export const EmbeddedCheckoutProvider: FunctionComponent<
     return parseStripeProp(rawStripeProp, INVALID_STRIPE_ERROR);
   }, [rawStripeProp]);
 
-  const embeddedCheckoutPromise = React.useRef<Promise<void> | null>(null);
+  const embeddedCheckoutPromise =
+    React.useRef<Promise<stripeJs.StripeEmbeddedCheckout> | null>(null);
   const loadedStripe = React.useRef<stripeJs.Stripe | null>(null);
+  const isMounted = React.useRef(false);
 
   const [ctx, setContext] = React.useState<EmbeddedCheckoutContextValue>({
     embeddedCheckout: null,
   });
+
+  // Declared before the init effect so that it is set when init runs.
+  React.useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     // Don't support any ctx updates once embeddedCheckout or stripe is set.
@@ -97,11 +107,16 @@ export const EmbeddedCheckoutProvider: FunctionComponent<
     const setStripeAndInitEmbeddedCheckout = (stripe: stripeJs.Stripe) => {
       if (loadedStripe.current || embeddedCheckoutPromise.current) return;
 
+      // The stripe promise can resolve after the provider has unmounted.
+      // Nothing would destroy a checkout created at that point.
+      if (!isMounted.current) return;
+
       loadedStripe.current = stripe;
       embeddedCheckoutPromise.current = loadedStripe.current
         .createEmbeddedCheckoutPage(options as any)
         .then((embeddedCheckout: stripeJs.StripeEmbeddedCheckout) => {
           setContext({embeddedCheckout});
+          return embeddedCheckout;
         });
     };
 
@@ -136,11 +151,15 @@ export const EmbeddedCheckoutProvider: FunctionComponent<
       } else if (embeddedCheckoutPromise.current) {
         // If embedded checkout is still initializing, destroy it once
         // it's done. This could be caused by unmounting very quickly
-        // after mounting.
-        embeddedCheckoutPromise.current.then(() => {
-          embeddedCheckoutPromise.current = null;
-          if (ctx.embeddedCheckout) {
-            ctx.embeddedCheckout.destroy();
+        // after mounting. This cleanup also runs when ctx is first set and
+        // during StrictMode's simulated unmount, so only destroy the
+        // checkout if the provider is still unmounted when it resolves.
+        // `ctx` is captured from the render before init finished, so use
+        // the resolved checkout instead.
+        embeddedCheckoutPromise.current.then((embeddedCheckout) => {
+          if (!isMounted.current) {
+            embeddedCheckoutPromise.current = null;
+            embeddedCheckout.destroy();
           }
         });
       }

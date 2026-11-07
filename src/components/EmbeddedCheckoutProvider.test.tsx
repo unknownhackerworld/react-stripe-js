@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {StrictMode} from 'react';
 import {render, act, renderHook} from '@testing-library/react';
 
 import {
@@ -6,6 +6,7 @@ import {
   useEmbeddedCheckoutContext,
 } from './EmbeddedCheckoutProvider';
 import * as mocks from '../../test/mocks';
+import makeDeferred from '../../test/makeDeferred';
 
 describe('EmbeddedCheckoutProvider', () => {
   let mockStripe: any;
@@ -480,5 +481,64 @@ describe('EmbeddedCheckoutProvider', () => {
 
     rerender(<div></div>);
     expect(mockEmbeddedCheckout.destroy).toBeCalled();
+  });
+
+  it('destroys Embedded Checkout that finishes initializing after the component unmounts', async () => {
+    const deferred = makeDeferred<any>();
+    mockStripe.createEmbeddedCheckoutPage.mockReturnValue(deferred.promise);
+
+    const {unmount} = render(
+      <EmbeddedCheckoutProvider stripe={mockStripe} options={fakeOptions} />
+    );
+    expect(mockStripe.createEmbeddedCheckoutPage).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(mockEmbeddedCheckout.destroy).not.toHaveBeenCalled();
+
+    await act(() => deferred.resolve(mockEmbeddedCheckout));
+
+    expect(mockEmbeddedCheckout.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not create Embedded Checkout if the component unmounts before stripe resolves', async () => {
+    const stripeDeferred = makeDeferred<any>();
+
+    const {unmount} = render(
+      <EmbeddedCheckoutProvider
+        stripe={stripeDeferred.promise}
+        options={fakeOptions}
+      />
+    );
+
+    unmount();
+    await act(() => stripeDeferred.resolve(mockStripe));
+
+    expect(mockStripe.createEmbeddedCheckoutPage).not.toHaveBeenCalled();
+  });
+
+  it('does not destroy Embedded Checkout on the StrictMode remount', async () => {
+    const deferred = makeDeferred<any>();
+    mockStripe.createEmbeddedCheckoutPage.mockReturnValue(deferred.promise);
+
+    const wrapper = ({children}: {children?: React.ReactNode}) => (
+      <StrictMode>
+        <EmbeddedCheckoutProvider stripe={mockStripe} options={fakeOptions}>
+          {children}
+        </EmbeddedCheckoutProvider>
+      </StrictMode>
+    );
+
+    const {result, unmount} = renderHook(() => useEmbeddedCheckoutContext(), {
+      wrapper,
+    });
+
+    await act(() => deferred.resolve(mockEmbeddedCheckout));
+
+    expect(mockStripe.createEmbeddedCheckoutPage).toHaveBeenCalledTimes(1);
+    expect(mockEmbeddedCheckout.destroy).not.toHaveBeenCalled();
+    expect(result.current.embeddedCheckout).toBe(mockEmbeddedCheckout);
+
+    unmount();
+    expect(mockEmbeddedCheckout.destroy).toHaveBeenCalledTimes(1);
   });
 });
